@@ -8,6 +8,7 @@ from google.genai import types
 # Set Page Configuration
 st.set_page_config(page_title="Dubai Customs Data Segregator", layout="wide")
 # Hide Streamlit header, toolbar, GitHub icon, and footer
+# Hide Streamlit header, toolbar, footer, and bottom "Manage app" bar
 hide_st_style = """
     <style>
     #MainMenu {visibility: hidden;}
@@ -17,6 +18,11 @@ hide_st_style = """
     div[data-testid="stDecoration"] {visibility: hidden; height: 0%;}
     div[data-testid="stStatusWidget"] {visibility: hidden;}
     #GithubIcon {visibility: hidden;}
+    
+    /* Hides the bottom-right Streamlit Cloud 'Manage app' button */
+    .stAppDeployButton {display: none !important;}
+    div[data-testid="stAppViewBlockContainer"] + div {display: none !important;}
+    [data-testid="manage-app-button"] {display: none !important;}
     </style>
 """
 st.markdown(hide_st_style, unsafe_allow_html=True)
