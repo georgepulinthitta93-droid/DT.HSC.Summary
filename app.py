@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import json
-import uuid
+import io
 from google import genai
 from google.genai import types
 
@@ -53,20 +53,8 @@ if st.sidebar.button("Logout"):
 st.title("📦 Dubai Customs Invoice & HS Code Segregator")
 st.write("Upload Commercial Invoices / Packing Lists / Certificates of Origin (PDFs) to automatically extract header metadata and group line items by **HS Code & Country of Origin** for Dubai Trade entry.")
 
-# API Key Handling (Safe Secrets Reading)
-secret_key = ""
-try:
-    if "GEMINI_API_KEY" in st.secrets:
-        secret_key = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    pass
-
-gemini_api_key = st.sidebar.text_input(
-    "Google Gemini API Key", 
-    value=secret_key,
-    type="password", 
-    help="Loaded automatically if configured in secrets.toml."
-)
+# API Key Handling
+gemini_api_key = st.sidebar.text_input("Google Gemini API Key", type="password", help="Enter your Gemini API key from Google AI Studio.")
 
 if not gemini_api_key:
     st.warning("⚠️ Please enter your Google Gemini API Key in the sidebar to begin processing documents.")
@@ -134,8 +122,9 @@ def process_documents(files):
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         
+        # Call Gemini Vision API
         response = client.models.generate_content(
-            model='gemini-3.6-flash',
+            model='gemini-2.5-flash',
             contents=[
                 types.Part.from_bytes(
                     data=file_bytes,
@@ -168,6 +157,8 @@ if uploaded_files and st.button("🚀 Process & Segregate for Dubai Customs"):
 if "extracted_data" in st.session_state:
     extracted_data = st.session_state["extracted_data"]
     
+    output_excel_buffers = {}
+    
     for idx, inv in enumerate(extracted_data):
         header = inv.get("header", {})
         line_items = inv.get("line_items", [])
@@ -176,6 +167,7 @@ if "extracted_data" in st.session_state:
         
         st.subheader(f"📄 Invoice #{inv_num} ({header.get('invoice_type', 'Invoice')})")
         
+        # Display Header Information in Columns
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Seller/Exporter", header.get("seller_exporter_name", "N/A"))
         col1.metric("Incoterms", header.get("incoterms", "N/A"))
@@ -189,6 +181,7 @@ if "extracted_data" in st.session_state:
         col4.metric("Total Pages", header.get("total_pages", 1))
         col4.metric("Total Invoices in Set", header.get("total_invoices_in_set", 1))
         
+        # Process Line Items & Proportional Weights
         df_items = pd.DataFrame(line_items)
         
         if not df_items.empty:
@@ -196,6 +189,7 @@ if "extracted_data" in st.session_state:
             header_net_w = header.get("total_net_weight_kg", 0.0) or 0.0
             header_gross_w = header.get("total_gross_weight_kg", 0.0) or 0.0
             
+            # Auto-calculate proportional weights if item weights are missing
             if "item_net_weight_kg" not in df_items.columns or df_items["item_net_weight_kg"].isnull().all():
                 if total_qty > 0:
                     df_items["NET WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_net_w).round(3)
@@ -212,6 +206,7 @@ if "extracted_data" in st.session_state:
             else:
                 df_items["GROSS WEIGHT/KGS"] = df_items["item_gross_weight_kg"].fillna(0.0)
 
+            # Standardize Column Names for Dubai Customs
             rename_map = {
                 "hs_code": "H. S. CODE",
                 "description": "DESCRIPTION",
@@ -227,17 +222,20 @@ if "extracted_data" in st.session_state:
             cols_to_show = [c for c in cols_order if c in df_items.columns]
             df_items = df_items[cols_to_show]
 
+            # Interactive Table for Editing
             st.write("#### ✏️ Dubai Customs Declaration Grid (Editable)")
             edited_df = st.data_editor(
                 df_items, 
                 num_rows="dynamic", 
-                key=f"editor_{idx}_{inv_num}_{uuid.uuid4().hex[:6]}",
+                key=f"editor_{inv_num}",
                 use_container_width=True
             )
 
+            # Show Aggregated Totals
             t_col1, t_col2, t_col3 = st.columns(3)
             t_col1.write(f"**Total Net Weight:** {edited_df['NET WEIGHT/KGS'].sum():,.3f} KG")
             t_col2.write(f"**Total Gross Weight:** {edited_df['GROSS WEIGHT/KGS'].sum():,.3f} KG")
             t_col3.write(f"**Total Declaration Value:** {header.get('currency', '')} {edited_df['VALUE'].sum():,.2f}")
 
         st.markdown("---")
+        
