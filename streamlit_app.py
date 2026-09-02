@@ -7,7 +7,19 @@ from google.genai import types
 
 # Set Page Configuration
 st.set_page_config(page_title="Dubai Customs Data Segregator", layout="wide")
-
+# Hide Streamlit header, toolbar, GitHub icon, and footer
+hide_st_style = """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    div[data-testid="stToolbar"] {visibility: hidden; height: 0%;}
+    div[data-testid="stDecoration"] {visibility: hidden; height: 0%;}
+    div[data-testid="stStatusWidget"] {visibility: hidden;}
+    #GithubIcon {visibility: hidden;}
+    </style>
+"""
+st.markdown(hide_st_style, unsafe_allow_html=True)
 # ==========================================
 # 1. USER AUTHENTICATION MODULE
 # ==========================================
