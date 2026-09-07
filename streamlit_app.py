@@ -146,13 +146,15 @@ CRITICAL RULES FOR WEIGHT DISTRIBUTION:
 3. Ensure 'condition' is strictly "NEW" unless explicitly stated as "USED" or "PERSONAL EFFECTS".
 """
 
+import time
+
 def process_documents(files):
     all_results = []
     
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         
-        # Primary call using gemini-3.6-flash with fallback on high demand
+        # Primary call using active production model
         try:
             response = client.models.generate_content(
                 model='gemini-3.6-flash',
@@ -168,10 +170,11 @@ def process_documents(files):
                 )
             )
         except Exception as e:
+            # If server is temporarily busy (503), pause briefly and retry gemini-3.6-flash
             if "503" in str(e) or "UNAVAILABLE" in str(e):
-                # Fallback model if primary endpoint experiences high traffic
+                time.sleep(2)
                 response = client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-3.6-flash',
                     contents=[
                         types.Part.from_bytes(
                             data=file_bytes,
