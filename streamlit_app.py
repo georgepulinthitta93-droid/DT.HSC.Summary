@@ -152,19 +152,39 @@ def process_documents(files):
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         
-        response = client.models.generate_content(
-            model='gemini-3.6-flash',
-            contents=[
-                types.Part.from_bytes(
-                    data=file_bytes,
-                    mime_type='application/pdf'
-                ),
-                EXTRACTION_PROMPT
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json"
+        # Primary call using gemini-3.6-flash with fallback on high demand
+        try:
+            response = client.models.generate_content(
+                model='gemini-3.6-flash',
+                contents=[
+                    types.Part.from_bytes(
+                        data=file_bytes,
+                        mime_type='application/pdf'
+                    ),
+                    EXTRACTION_PROMPT
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json"
+                )
             )
-        )
+        except Exception as e:
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                # Fallback model if primary endpoint experiences high traffic
+                response = client.models.generate_content(
+                    model='gemini-1.5-flash',
+                    contents=[
+                        types.Part.from_bytes(
+                            data=file_bytes,
+                            mime_type='application/pdf'
+                        ),
+                        EXTRACTION_PROMPT
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
+                    )
+                )
+            else:
+                raise e
         
         data = json.loads(response.text)
         all_results.extend(data)
