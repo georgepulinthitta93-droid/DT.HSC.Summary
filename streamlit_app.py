@@ -151,38 +151,57 @@ import time
 def process_documents(files):
     all_results = []
     
+    # Priority list of model endpoints to cycle through
+    candidate_models = [
+        'gemini-3.6-flash',
+        'gemini-2.5-flash'
+    ]
+    
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
+        success = False
+        last_exception = None
         
-        # Retry up to 3 times if Google returns a 503 error
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=[
-                        types.Part.from_bytes(
-                            data=file_bytes,
-                            mime_type='application/pdf'
-                        ),
-                        EXTRACTION_PROMPT
-                    ],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
+        # Cycle through available candidate models
+        for model_name in candidate_models:
+            # Try up to 3 attempts per model with exponential backoff
+            for attempt in range(3):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type='application/pdf'
+                            ),
+                            EXTRACTION_PROMPT
+                        ],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
                     )
-                )
-                # Success - break out of the retry loop
-                data = json.loads(response.text)
-                all_results.extend(data)
-                break
-            except Exception as e:
-                # If server is busy (503), wait and retry automatically
-                if ("503" in str(e) or "UNAVAILABLE" in str(e)) and attempt < max_retries - 1:
-                    time.sleep(2 * (attempt + 1))  # Wait 2s, then 4s on subsequent retries
-                    continue
-                else:
-                    raise e
-        
+                    data = json.loads(response.text)
+                    all_results.extend(data)
+                    success = True
+                    break  # Success! Break attempt loop
+                except Exception as e:
+                    last_exception = e
+                    err_msg = str(e)
+                    # If server is busy or rate-limited, pause and retry
+                    if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
+                        wait_time = (attempt + 1) * 2  # Waits 2s, then 4s, then 6s
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        break  # Non-retriable error, try next model candidate
+            
+            if success:
+                break  # Move to next uploaded document
+                
+        if not success:
+            # Log gracefully if all retries fail across all models
+            st.error(f"⚠️ Document processing temporary delay: {str(last_exception)}")
+            
     return all_results
 
 # ==========================================
