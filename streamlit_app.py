@@ -154,7 +154,7 @@ def process_documents(files):
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         
-        # Primary call using active production model
+        # Try primary request
         try:
             response = client.models.generate_content(
                 model='gemini-3.6-flash',
@@ -170,9 +170,9 @@ def process_documents(files):
                 )
             )
         except Exception as e:
-            # If server is temporarily busy (503), pause briefly and retry gemini-3.6-flash
+            # If Google API is temporarily overloaded (503), wait 3 seconds and retry automatically
             if "503" in str(e) or "UNAVAILABLE" in str(e):
-                time.sleep(2)
+                time.sleep(3)
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[
