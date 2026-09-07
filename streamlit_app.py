@@ -2,12 +2,13 @@ import streamlit as st
 import pandas as pd
 import json
 import uuid
+import time
 from google import genai
 from google.genai import types
 
 # Set Page Configuration
 st.set_page_config(page_title="Dubai Customs Data Segregator", layout="wide")
-# Hide Streamlit header, toolbar, GitHub icon, and footer
+
 # Hide Streamlit header, toolbar, footer, and bottom "Manage app" bar
 hide_st_style = """
     <style>
@@ -18,14 +19,13 @@ hide_st_style = """
     div[data-testid="stDecoration"] {visibility: hidden; height: 0%;}
     div[data-testid="stStatusWidget"] {visibility: hidden;}
     #GithubIcon {visibility: hidden;}
-    
-    /* Hides the bottom-right Streamlit Cloud 'Manage app' button */
     .stAppDeployButton {display: none !important;}
     div[data-testid="stAppViewBlockContainer"] + div {display: none !important;}
     [data-testid="manage-app-button"] {display: none !important;}
     </style>
 """
 st.markdown(hide_st_style, unsafe_allow_html=True)
+
 # ==========================================
 # 1. USER AUTHENTICATION MODULE
 # ==========================================
@@ -146,61 +146,51 @@ CRITICAL RULES FOR WEIGHT DISTRIBUTION:
 3. Ensure 'condition' is strictly "NEW" unless explicitly stated as "USED" or "PERSONAL EFFECTS".
 """
 
-import time
-
 def process_documents(files):
     all_results = []
-    
-    # Priority list of model endpoints to cycle through
-    candidate_models = [
-        'gemini-3.6-flash',
-        'gemini-2.5-flash'
-    ]
     
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         success = False
         last_exception = None
         
-        # Cycle through available candidate models
-        for model_name in candidate_models:
-            # Try up to 3 attempts per model with exponential backoff
-            for attempt in range(3):
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=[
-                            types.Part.from_bytes(
-                                data=file_bytes,
-                                mime_type='application/pdf'
-                            ),
-                            EXTRACTION_PROMPT
-                        ],
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json"
-                        )
+        # Retry up to 4 times with backoff for 503 capacity issues
+        for attempt in range(4):
+            try:
+                response = client.models.generate_content(
+                    model='gemini-3.6-flash',
+                    contents=[
+                        types.Part.from_bytes(
+                            data=file_bytes,
+                            mime_type='application/pdf'
+                        ),
+                        EXTRACTION_PROMPT
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json"
                     )
-                    data = json.loads(response.text)
-                    all_results.extend(data)
-                    success = True
-                    break  # Success! Break attempt loop
-                except Exception as e:
-                    last_exception = e
-                    err_msg = str(e)
-                    # If server is busy or rate-limited, pause and retry
-                    if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
-                        wait_time = (attempt + 1) * 2  # Waits 2s, then 4s, then 6s
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        break  # Non-retriable error, try next model candidate
-            
-            if success:
-                break  # Move to next uploaded document
+                )
                 
-        if not success:
-            # Log gracefully if all retries fail across all models
-            st.error(f"⚠️ Document processing temporary delay: {str(last_exception)}")
+                if response.text:
+                    parsed_json = json.loads(response.text)
+                    if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                        all_results.extend(parsed_json)
+                        success = True
+                        break
+                    elif isinstance(parsed_json, dict) and parsed_json:
+                        all_results.append(parsed_json)
+                        success = True
+                        break
+            except Exception as e:
+                last_exception = e
+                if "503" in str(e) or "429" in str(e) or "UNAVAILABLE" in str(e):
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                else:
+                    break
+                    
+        if not success and last_exception:
+            raise last_exception
             
     return all_results
 
@@ -211,12 +201,15 @@ if uploaded_files and st.button("🚀 Process & Segregate for Dubai Customs"):
     with st.spinner("Extracting invoice metadata and grouping by HS Codes..."):
         try:
             raw_data = process_documents(uploaded_files)
-            st.session_state["extracted_data"] = raw_data
-            st.success("Extraction Complete!")
+            if not raw_data:
+                st.warning("⚠️ Document processed, but no valid invoice line items were detected. Please check the scan quality of your PDF.")
+            else:
+                st.session_state["extracted_data"] = raw_data
+                st.success("Extraction Complete!")
         except Exception as e:
             st.error(f"Error processing documents: {str(e)}")
 
-if "extracted_data" in st.session_state:
+if "extracted_data" in st.session_state and st.session_state["extracted_data"]:
     extracted_data = st.session_state["extracted_data"]
     
     for idx, inv in enumerate(extracted_data):
