@@ -154,25 +154,10 @@ def process_documents(files):
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         
-        # Try primary request
-        try:
-            response = client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=[
-                    types.Part.from_bytes(
-                        data=file_bytes,
-                        mime_type='application/pdf'
-                    ),
-                    EXTRACTION_PROMPT
-                ],
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
-        except Exception as e:
-            # If Google API is temporarily overloaded (503), wait 3 seconds and retry automatically
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
-                time.sleep(3)
+        # Retry up to 3 times if Google returns a 503 error
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
                 response = client.models.generate_content(
                     model='gemini-3.6-flash',
                     contents=[
@@ -186,11 +171,17 @@ def process_documents(files):
                         response_mime_type="application/json"
                     )
                 )
-            else:
-                raise e
-        
-        data = json.loads(response.text)
-        all_results.extend(data)
+                # Success - break out of the retry loop
+                data = json.loads(response.text)
+                all_results.extend(data)
+                break
+            except Exception as e:
+                # If server is busy (503), wait and retry automatically
+                if ("503" in str(e) or "UNAVAILABLE" in str(e)) and attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1))  # Wait 2s, then 4s on subsequent retries
+                    continue
+                else:
+                    raise e
         
     return all_results
 
