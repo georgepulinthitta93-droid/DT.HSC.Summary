@@ -146,49 +146,65 @@ CRITICAL RULES FOR WEIGHT DISTRIBUTION:
 3. Ensure 'condition' is strictly "NEW" unless explicitly stated as "USED" or "PERSONAL EFFECTS".
 """
 
+import time
+
 def process_documents(files):
     all_results = []
+    
+    # Valid, active Gemini model endpoints in order of preference
+    candidate_models = [
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-3.1-pro-preview'
+    ]
     
     for uploaded_file in files:
         file_bytes = uploaded_file.read()
         success = False
         last_exception = None
         
-        # Retry up to 4 times with backoff for 503 capacity issues
-        for attempt in range(4):
-            try:
-                response = client.models.generate_content(
-                    model='gemini-3.6-flash',
-                    contents=[
-                        types.Part.from_bytes(
-                            data=file_bytes,
-                            mime_type='application/pdf'
-                        ),
-                        EXTRACTION_PROMPT
-                    ],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json"
+        # Iterate through model fallbacks
+        for model_name in candidate_models:
+            # Try 2 attempts per model with short backoff
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[
+                            types.Part.from_bytes(
+                                data=file_bytes,
+                                mime_type='application/pdf'
+                            ),
+                            EXTRACTION_PROMPT
+                        ],
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
                     )
-                )
-                
-                if response.text:
-                    parsed_json = json.loads(response.text)
-                    if isinstance(parsed_json, list) and len(parsed_json) > 0:
-                        all_results.extend(parsed_json)
-                        success = True
-                        break
-                    elif isinstance(parsed_json, dict) and parsed_json:
-                        all_results.append(parsed_json)
-                        success = True
-                        break
-            except Exception as e:
-                last_exception = e
-                if "503" in str(e) or "429" in str(e) or "UNAVAILABLE" in str(e):
-                    time.sleep(2 * (attempt + 1))
-                    continue
-                else:
-                    break
                     
+                    if response.text:
+                        parsed_json = json.loads(response.text)
+                        if isinstance(parsed_json, list) and len(parsed_json) > 0:
+                            all_results.extend(parsed_json)
+                            success = True
+                            break
+                        elif isinstance(parsed_json, dict) and parsed_json:
+                            all_results.append(parsed_json)
+                            success = True
+                            break
+                except Exception as e:
+                    last_exception = e
+                    err_msg = str(e)
+                    # Catch 503 capacity issues, 429 rate limits, or server unavailable
+                    if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
+                        time.sleep(1.5)
+                        continue
+                    else:
+                        break # Move to next model on other errors
+            
+            if success:
+                break # Document successfully processed, exit model fallback loop
+                
         if not success and last_exception:
             raise last_exception
             
