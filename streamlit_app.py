@@ -151,11 +151,10 @@ import time
 def process_documents(files):
     all_results = []
     
-    # Valid, active Gemini model endpoints in order of preference
+    # Stick strictly to Flash models to maximize free quota limits
     candidate_models = [
         'gemini-3.6-flash',
-        'gemini-3.5-flash',
-        'gemini-3.1-pro-preview'
+        'gemini-3.5-flash'
     ]
     
     for uploaded_file in files:
@@ -163,10 +162,9 @@ def process_documents(files):
         success = False
         last_exception = None
         
-        # Iterate through model fallbacks
         for model_name in candidate_models:
-            # Try 2 attempts per model with short backoff
-            for attempt in range(2):
+            # Try up to 3 times per model with longer backoff when rate-limited
+            for attempt in range(3):
                 try:
                     response = client.models.generate_content(
                         model=model_name,
@@ -195,17 +193,18 @@ def process_documents(files):
                 except Exception as e:
                     last_exception = e
                     err_msg = str(e)
-                    # Catch 503 capacity issues, 429 rate limits, or server unavailable
-                    if "503" in err_msg or "429" in err_msg or "UNAVAILABLE" in err_msg:
-                        time.sleep(1.5)
+                    # If rate-limited (429) or busy (503), wait 5s then retry
+                    if "429" in err_msg or "503" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "UNAVAILABLE" in err_msg:
+                        time.sleep(5 * (attempt + 1))
                         continue
                     else:
-                        break # Move to next model on other errors
+                        break
             
             if success:
-                break # Document successfully processed, exit model fallback loop
+                break
                 
         if not success and last_exception:
+            st.warning("⚠️ Daily API Free-Tier Quota reached on Google AI Studio. Please wait a few minutes or switch your API key to a Pay-As-You-Go project.")
             raise last_exception
             
     return all_results
