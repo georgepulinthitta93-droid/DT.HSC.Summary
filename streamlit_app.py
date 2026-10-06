@@ -7,13 +7,13 @@ import uuid
 from google import genai
 from google.genai import types
 
-# Page Config
+# Page Configuration
 st.set_page_config(page_title="Dubai Customs Data Segregator", layout="wide")
 
 st.title("📦 Dubai Customs Invoice & HS Code Segregator")
 st.caption("Upload Commercial Invoices / Packing Lists / Certificates of Origin (PDFs) to automatically extract header metadata and group line items by HS Code & Country of Origin for Dubai Trade entry.")
 
-# Initialize Gemini Client (Uses GEMINI_API_KEY from st.secrets)
+# Initialize Gemini Client (Uses GEMINI_API_KEY from st.secrets or environment)
 client = genai.Client()
 
 # ==========================================
@@ -67,11 +67,16 @@ CRITICAL RULES FOR WEIGHT & FINANCIAL DISTRIBUTION:
 """
 
 # ==========================================
-# MULTI-MODEL CASCADING PROCESSOR
+# STABLE MULTI-MODEL FALLBACK ENGINE
 # ==========================================
 def process_documents(files):
     all_results = []
-    candidate_models = ['gemini-2.5-flash', 'gemini-2.0-flash']
+    
+    # Active Gemini endpoints (avoids deprecated model strings)
+    candidate_models = [
+        'gemini-2.5-flash',
+        'gemini-1.5-flash'
+    ]
     
     for uploaded_file in files:
         uploaded_file.seek(0)
@@ -80,7 +85,7 @@ def process_documents(files):
         last_exception = None
         
         for model_name in candidate_models:
-            for attempt in range(2):
+            for attempt in range(3):
                 try:
                     response = client.models.generate_content(
                         model=model_name,
@@ -109,8 +114,9 @@ def process_documents(files):
                 except Exception as e:
                     last_exception = e
                     err_msg = str(e)
+                    # Pause execution on free-tier rate limits (429/503/RESOURCE_EXHAUSTED)
                     if "429" in err_msg or "503" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
-                        time.sleep(2)
+                        time.sleep(5)
                         continue
                     else:
                         break
@@ -118,7 +124,7 @@ def process_documents(files):
                 break
                 
         if not success and last_exception:
-            st.error("⚠️ Free-Tier API Rate Limit reached. Please wait 1-2 minutes before retrying or switch your key to a Pay-As-You-Go project in Google AI Studio.")
+            st.warning("⚠️ Free-Tier rate limit reached. Please wait 1 minute before retrying or process files in smaller batches.")
             raise last_exception
             
     return all_results
@@ -162,7 +168,7 @@ if "extracted_data" in st.session_state and st.session_state["extracted_data"]:
             header_net_w = header.get("total_net_weight_kg", 0.0) or 0.0
             header_gross_w = header.get("total_gross_weight_kg", 0.0) or 0.0
             
-            # Weight Distribution Calculations
+            # Proportional Weight Distribution Calculations
             if "item_net_weight_kg" not in df_items.columns or df_items["item_net_weight_kg"].isnull().all():
                 df_items["NET WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_net_w).round(3) if total_qty > 0 else 0.0
             else:
