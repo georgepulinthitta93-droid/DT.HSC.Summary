@@ -209,94 +209,130 @@ def process_documents(files):
             
     return all_results
 
-# ==========================================
-# 4. DATA PROCESSING & WEIGHT CALCULATIONS
-# ==========================================
-if uploaded_files and st.button("🚀 Process & Segregate for Dubai Customs"):
-    with st.spinner("Extracting invoice metadata and grouping by HS Codes..."):
-        try:
-            raw_data = process_documents(uploaded_files)
-            if not raw_data:
-                st.warning("⚠️ Document processed, but no valid invoice line items were detected. Please check the scan quality of your PDF.")
-            else:
-                st.session_state["extracted_data"] = raw_data
-                st.success("Extraction Complete!")
-        except Exception as e:
-            st.error(f"Error processing documents: {str(e)}")
+import io
+import uuid
+import pandas as pd
+import streamlit as st
 
+# ==========================================
+# 4. DATA PROCESSING & CONSOLIDATED RENDERING
+# ==========================================
 if "extracted_data" in st.session_state and st.session_state["extracted_data"]:
     extracted_data = st.session_state["extracted_data"]
+    
+    # Pre-build Master Consolidated Table across all invoices for top-level download
+    all_shipment_rows = []
     
     for idx, inv in enumerate(extracted_data):
         header = inv.get("header", {})
         line_items = inv.get("line_items", [])
-        
         inv_num = header.get("invoice_number", f"Invoice_{idx+1}")
         
-        st.subheader(f"📄 Invoice #{inv_num} ({header.get('invoice_type', 'Invoice')})")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Seller/Exporter", header.get("seller_exporter_name", "N/A"))
-        col1.metric("Incoterms", header.get("incoterms", "N/A"))
-        
-        col2.metric("Total Invoice Value", f"{header.get('currency', '')} {header.get('total_invoice_value', 0.0):,.2f}")
-        col2.metric("Payment Terms", header.get("payment_terms", "N/A"))
-        
-        col3.metric("Total Net Weight", f"{header.get('total_net_weight_kg', 0.0)} KG")
-        col3.metric("Total Gross Weight", f"{header.get('total_gross_weight_kg', 0.0)} KG")
-        
-        col4.metric("Total Pages", header.get("total_pages", 1))
-        col4.metric("Total Invoices in Set", header.get("total_invoices_in_set", 1))
-        
         df_items = pd.DataFrame(line_items)
-        
         if not df_items.empty:
             total_qty = df_items["qty"].sum() if "qty" in df_items else 0
             header_net_w = header.get("total_net_weight_kg", 0.0) or 0.0
             header_gross_w = header.get("total_gross_weight_kg", 0.0) or 0.0
             
+            # Proportional weight distribution calculations
             if "item_net_weight_kg" not in df_items.columns or df_items["item_net_weight_kg"].isnull().all():
-                if total_qty > 0:
-                    df_items["NET WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_net_w).round(3)
-                else:
-                    df_items["NET WEIGHT/KGS"] = 0.0
+                df_items["NET WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_net_w).round(3) if total_qty > 0 else 0.0
             else:
                 df_items["NET WEIGHT/KGS"] = df_items["item_net_weight_kg"].fillna(0.0)
                 
             if "item_gross_weight_kg" not in df_items.columns or df_items["item_gross_weight_kg"].isnull().all():
-                if total_qty > 0:
-                    df_items["GROSS WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_gross_w).round(3)
-                else:
-                    df_items["GROSS WEIGHT/KGS"] = 0.0
+                df_items["GROSS WEIGHT/KGS"] = (df_items["qty"] / total_qty * header_gross_w).round(3) if total_qty > 0 else 0.0
             else:
                 df_items["GROSS WEIGHT/KGS"] = df_items["item_gross_weight_kg"].fillna(0.0)
 
+            # Column renaming for Dubai Trade compatibility
             rename_map = {
                 "hs_code": "H. S. CODE",
                 "description": "DESCRIPTION",
+                "condition": "CONDITION",
                 "country_of_origin": "COUNTRY OF ORIGIN",
                 "unit": "units",
                 "qty": "Qty",
-                "value": "VALUE",
-                "condition": "CONDITION"
+                "value": "VALUE (EXCL. VAT)",
+                "vat_amount": "VAT AMOUNT",
+                "total_value_incl_vat": "TOTAL VALUE (INCL. VAT)",
+                "value": "VALUE"
             }
             df_items = df_items.rename(columns=rename_map)
             
-            cols_order = ["H. S. CODE", "DESCRIPTION", "CONDITION", "COUNTRY OF ORIGIN", "units", "Qty", "NET WEIGHT/KGS", "GROSS WEIGHT/KGS", "VALUE"]
+            # Standard Dubai Customs Column Ordering
+            cols_order = [
+                "H. S. CODE", "DESCRIPTION", "CONDITION", "COUNTRY OF ORIGIN", 
+                "units", "Qty", "NET WEIGHT/KGS", "GROSS WEIGHT/KGS", 
+                "VALUE (EXCL. VAT)", "VAT AMOUNT", "TOTAL VALUE (INCL. VAT)", "VALUE"
+            ]
             cols_to_show = [c for c in cols_order if c in df_items.columns]
             df_items = df_items[cols_to_show]
+            
+            # Insert Invoice Number as Column 1
+            df_items.insert(0, "INVOICE NO.", inv_num)
+            all_shipment_rows.append(df_items)
 
-            st.write("#### ✏️ Dubai Customs Declaration Grid (Editable)")
-            edited_df = st.data_editor(
-                df_items, 
-                num_rows="dynamic", 
-                key=f"editor_{idx}_{inv_num}_{uuid.uuid4().hex[:6]}",
-                use_container_width=True
-            )
+    # ------------------------------------------------------------------
+    # TOP CONTROL BAR: MASTER EXCEL DOWNLOAD & SUMMARY METRICS
+    # ------------------------------------------------------------------
+    if all_shipment_rows:
+        master_df = pd.concat(all_shipment_rows, ignore_index=True)
+        
+        st.markdown("### 📊 Master Shipment Declaration Summary")
+        
+        # Summary Metrics Row
+        m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+        m_col1.metric("Total Invoices", len(extracted_data))
+        m_col2.metric("Total Line Items", len(master_df))
+        m_col3.metric("Total Net Weight", f"{master_df['NET WEIGHT/KGS'].sum():,.3f} KG")
+        
+        val_col = "TOTAL VALUE (INCL. VAT)" if "TOTAL VALUE (INCL. VAT)" in master_df.columns else "VALUE"
+        m_col4.metric("Total Declaration Value", f"{master_df[val_col].sum():,.2f}")
+        
+        # Buffer Excel Generation
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            master_df.to_excel(writer, index=False, sheet_name='Consolidated Customs Data')
+        
+        # TOP EXCEL DOWNLOAD BUTTON
+        st.download_button(
+            label="📥 Download Master Excel (All Invoices Combined)",
+            data=excel_buffer.getvalue(),
+            file_name=f"Dubai_Customs_Master_Declaration_{uuid.uuid4().hex[:6]}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary"
+        )
+        st.markdown("---")
 
-            t_col1, t_col2, t_col3 = st.columns(3)
-            t_col1.write(f"**Total Net Weight:** {edited_df['NET WEIGHT/KGS'].sum():,.3f} KG")
-            t_col2.write(f"**Total Gross Weight:** {edited_df['GROSS WEIGHT/KGS'].sum():,.3f} KG")
-            t_col3.write(f"**Total Declaration Value:** {header.get('currency', '')} {edited_df['VALUE'].sum():,.2f}")
+    # ------------------------------------------------------------------
+    # INDIVIDUAL INVOICE BREAKDOWN TABLES BELOW
+    # ------------------------------------------------------------------
+    st.markdown("### 📄 Individual Invoice Segregation Grids")
+    for idx, inv in enumerate(extracted_data):
+        header = inv.get("header", {})
+        inv_num = header.get("invoice_number", f"Invoice_{idx+1}")
+        
+        st.subheader(f"Invoice #{inv_num} ({header.get('invoice_type', 'Invoice')})")
+        
+        # Individual Invoice Cards
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Seller/Exporter", header.get("seller_exporter_name", "N/A"))
+        col1.metric("Incoterms", header.get("incoterms", "N/A"))
+        col2.metric("Total Value", f"{header.get('currency', '')} {header.get('total_invoice_value', 0.0):,.2f}")
+        col2.metric("Payment Terms", header.get("payment_terms", "N/A"))
+        col3.metric("Net Weight", f"{header.get('total_net_weight_kg', 0.0)} KG")
+        col3.metric("Gross Weight", f"{header.get('total_gross_weight_kg', 0.0)} KG")
+        col4.metric("Total Pages", header.get("total_pages", 1))
+        col4.metric("Set Invoices", header.get("total_invoices_in_set", 1))
 
+        # Filter lines for this specific invoice
+        inv_df = master_df[master_df["INVOICE NO."] == inv_num].drop(columns=["INVOICE NO."])
+        
+        st.data_editor(
+            inv_df, 
+            num_rows="dynamic", 
+            key=f"editor_{idx}_{inv_num}_{uuid.uuid4().hex[:6]}",
+            use_container_width=True
+        )
         st.markdown("---")
