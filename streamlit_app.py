@@ -147,14 +147,17 @@ CRITICAL RULES FOR WEIGHT DISTRIBUTION:
 """
 
 import time
+import json
+import streamlit as st
+from google.genai import types
 
 def process_documents(files):
     all_results = []
     
-    # Stick strictly to Flash models to maximize free quota limits
+    # Active Gemini Flash endpoints ordered by capacity
     candidate_models = [
-        'gemini-3.6-flash',
-        'gemini-3.5-flash'
+        'gemini-2.5-flash',
+        'gemini-2.0-flash'
     ]
     
     for uploaded_file in files:
@@ -162,9 +165,9 @@ def process_documents(files):
         success = False
         last_exception = None
         
+        # Iterate through model fallbacks
         for model_name in candidate_models:
-            # Try up to 3 times per model with longer backoff when rate-limited
-            for attempt in range(3):
+            for attempt in range(2):
                 try:
                     response = client.models.generate_content(
                         model=model_name,
@@ -193,22 +196,20 @@ def process_documents(files):
                 except Exception as e:
                     last_exception = e
                     err_msg = str(e)
-                    # If rate-limited (429) or busy (503), wait 5s then retry
-                    if "429" in err_msg or "503" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "UNAVAILABLE" in err_msg:
-                        time.sleep(5 * (attempt + 1))
+                    # Handle 429 Rate Limits / 503 Capacity delays gracefully
+                    if "429" in err_msg or "503" in err_msg or "RESOURCE_EXHAUSTED" in err_msg:
+                        time.sleep(2)
                         continue
                     else:
                         break
-            
             if success:
                 break
                 
         if not success and last_exception:
-            st.warning("⚠️ Daily API Free-Tier Quota reached on Google AI Studio. Please wait a few minutes or switch your API key to a Pay-As-You-Go project.")
+            st.error("⚠️ Daily API Free-Tier Quota reached on Google AI Studio. Please wait 1–2 minutes or switch your API key to a Pay-As-You-Go project.")
             raise last_exception
             
     return all_results
-
 import io
 import uuid
 import pandas as pd
